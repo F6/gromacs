@@ -45,6 +45,7 @@ gmx_add_libgromacs_sources(
     runner.cpp
     simulationcontext.cpp
     tpi.cpp
+    middle.cpp
     )
 
 gmx_install_headers()

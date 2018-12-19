@@ -63,7 +63,7 @@ const char *ens_names[ensNR+1] =
 
 const char *ei_names[eiNR+1] =
 {
-    "md", "steep", "cg", "bd", "sd2 - removed", "nm", "l-bfgs", "tpi", "tpic", "sd", "md-vv", "md-vv-avek", "mimic", nullptr
+    "md", "steep", "cg", "bd", "sd2 - removed", "nm", "l-bfgs", "tpi", "tpic", "sd", "md-vv", "md-vv-avek", "mimic", "middle", nullptr
 };
 
 const char *ecutscheme_names[ecutsNR+1] = {

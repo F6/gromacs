@@ -229,7 +229,7 @@ extern const char *ens_names[ensNR+1];
  * and the half step kinetic energy for temperature control
  */
 enum {
-    eiMD, eiSteep, eiCG, eiBD, eiSD2_REMOVED, eiNM, eiLBFGS, eiTPI, eiTPIC, eiSD1, eiVV, eiVVAK, eiMimic, eiNR
+    eiMD, eiSteep, eiCG, eiBD, eiSD2_REMOVED, eiNM, eiLBFGS, eiTPI, eiTPIC, eiSD1, eiVV, eiVVAK, eiMimic, eiMiddle, eiNR
 };
 //! Name of the integrator algorithm
 extern const char *ei_names[eiNR+1];
@@ -254,6 +254,9 @@ extern const char *ei_names[eiNR+1];
 #define EI_TPI(e) ((e) == eiTPI || (e) == eiTPIC)
 //! Do we deal with particle velocities
 #define EI_STATE_VELOCITY(e) (EI_MD(e) || EI_SD(e))
+//! Do we use Middle Scheme?
+#define EI_MIDDLE(e) ((e) == eiMiddle)
+
 
 //! Constraint algorithm
 enum {
