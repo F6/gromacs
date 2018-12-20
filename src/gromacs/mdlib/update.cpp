@@ -1945,3 +1945,193 @@ extern gmx_bool update_randomize_velocities(const t_inputrec *ir, int64_t step, 
     }
     return FALSE;
 }
+
+
+
+
+/* #################     BELOW: MIDDLE SCHEME UPDATES     ##################  */
+
+static void do_update_middle_scheme_vel(int start, int nrend, real dt,
+                             const rvec accel[], const ivec nFreeze[], const real invmass[],
+                             const unsigned short ptype[], const unsigned short cFREEZE[],
+                             const unsigned short cACC[], rvec v[], const rvec f[],
+                             gmx_bool bExtended, real veta, real alpha)
+{
+    int    gf = 0, ga = 0;
+    int    n, d;
+    real   g, mv1, mv2;
+
+    // In middle scheme, vel is updated as a half step so it is identical to vv
+
+    if (bExtended)
+    {
+        g        = 0.25*dt*veta*alpha;
+        mv1      = std::exp(-g);
+        mv2      = gmx::series_sinhx(g);
+    }
+    else
+    {
+        mv1      = 1.0;
+        mv2      = 1.0;
+    }
+    for (n = start; n < nrend; n++)
+    {
+        real w_dt = invmass[n]*dt;
+        if (cFREEZE)
+        {
+            gf   = cFREEZE[n];
+        }
+        if (cACC)
+        {
+            ga   = cACC[n];
+        }
+
+        for (d = 0; d < DIM; d++)
+        {
+            if ((ptype[n] != eptVSite) && (ptype[n] != eptShell) && !nFreeze[gf][d])
+            {
+                v[n][d]        = mv1*(mv1*v[n][d] + 0.5*(w_dt*mv2*f[n][d]))+0.5*accel[ga][d]*dt;
+            }
+            else
+            {
+                v[n][d]        = 0.0;
+            }
+        }
+    }
+} /* do_update_middle_scheme_vel */
+
+static void do_update_middle_scheme_pos(int start, int nrend, real dt,
+                             const ivec nFreeze[],
+                             const unsigned short ptype[], const unsigned short cFREEZE[],
+                             rvec x[], const rvec v[],
+                             gmx_bool bExtended, real veta)
+{
+    int    gf = 0;
+    int    n, d;
+    real   g, mr1, mr2;
+
+
+    if (bExtended)
+    {
+        g        = 0.25*dt*veta;
+        mr1      = std::exp(g);
+        mr2      = gmx::series_sinhx(g);
+    }
+    else
+    {
+        mr1      = 1.0;
+        mr2      = 1.0;
+    }
+
+    for (n = start; n < nrend; n++)
+    {
+
+        if (cFREEZE)
+        {
+            gf   = cFREEZE[n];
+        }
+
+        for (d = 0; d < DIM; d++)
+        {
+            if ((ptype[n] != eptVSite) && (ptype[n] != eptShell) && !nFreeze[gf][d])
+            {
+                x[n][d]   = mr1 * (mr1 * x[n][d] + 0.5 * mr2 * dt * v[n][d]);
+            }
+            else
+            {
+                x[n][d]   = x[n][d];
+            }
+        }
+    }
+} /* do_update_middle_scheme_pos !!bug, check the problems with xprime */
+
+
+
+void update_coords_middle_scheme(int64_t                             step,
+                   const t_inputrec                   *inputrec, /* input record and box stuff	*/
+                   const t_mdatoms                    *md,
+                   t_state                            *state,
+                   gmx::ArrayRefWithPadding<gmx::RVec> f,
+                   const t_fcdata                     *fcd,
+                   const gmx_ekindata_t               *ekind,
+                   gmx_update_t                       *upd,
+                   int                                 UpdatePart,
+                   const t_commrec                    *cr, /* these shouldn't be here -- need to think about it */
+                   const gmx::Constraints             *constr)
+{
+    gmx_bool bDoConstr = (nullptr != constr);
+
+    int  homenr = md->homenr;
+
+    /* Cast to real for faster code, no loss in precision (see comment above) */
+    real dt     = inputrec->delta_t;
+
+    /* We need to update the NMR restraint history when time averaging is used */
+    if (state->flags & (1<<estDISRE_RM3TAV))
+    {
+        update_disres_history(fcd, &state->hist);
+    }
+    if (state->flags & (1<<estORIRE_DTAV))
+    {
+        update_orires_history(fcd, &state->hist);
+    }
+
+    /* ############# START The update of velocities and positions ######### */
+    int nth = gmx_omp_nthreads_get(emntUpdate);
+
+#pragma omp parallel for num_threads(nth) schedule(static)
+    for (int th = 0; th < nth; th++)
+    {
+        try
+        {
+            int start_th, end_th;
+            getThreadAtomRange(nth, th, homenr, &start_th, &end_th);
+
+            rvec       *x_rvec  = state->x.rvec_array();
+            rvec       *v_rvec  = state->v.rvec_array();
+            const rvec *f_rvec  = as_rvec_array(f.unpaddedArrayRef().data());
+
+
+            // middle scheme is for NVT, so no barostat, but we can still incorporate it
+            // in order to use the built-in NHC t-coupling in GROMACS
+            // However, we should warn the user if p-coupling is used when integrator is 
+            // middle
+            gmx_bool bExtended = (inputrec->etc == etcNOSEHOOVER);
+
+            /* assuming barostat coupled to group 0 */
+            real alpha = 1.0 + DIM/static_cast<real>(inputrec->opts.nrdf[0]);
+            switch (UpdatePart)
+            {
+                case emstrtVELOCITY1:
+                case emstrtVELOCITY2:
+                    {   
+                        do_update_middle_scheme_vel(start_th, end_th, dt,
+                                        inputrec->opts.acc, inputrec->opts.nFreeze,
+                                        md->invmass, md->ptype,
+                                        md->cFREEZE, md->cACC,
+                                        v_rvec, f_rvec,
+                                        bExtended, state->veta, alpha);
+
+                        break;
+                    }
+                case emstrtPOSITION1:
+                case emstrtPOSITION2:
+                    {
+                        do_update_middle_scheme_pos(start_th, end_th, dt,
+                                        inputrec->opts.nFreeze,
+                                        md->ptype, md->cFREEZE,
+                                        x_rvec, v_rvec,
+                                        bExtended, state->veta);
+                        break;
+                    }
+                default: 
+                    gmx_fatal(FARGS, "Don't know which part to update.");
+            }
+
+        }
+        GMX_CATCH_ALL_AND_EXIT_WITH_FATAL_ERROR;
+    }
+
+}
+
+/* #################     END: MIDDLE SCHEME UPDATES     ##################  */

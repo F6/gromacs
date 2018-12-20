@@ -105,9 +105,8 @@ void Integrator::run(unsigned int ei, bool doRerun)
         case eiSD2_REMOVED:
             GMX_THROW(NotImplementedError("SD2 integrator has been removed"));
         case eiMiddle:
-            GMX_THROW(NotImplementedError("Middle Scheme is still under working"));
-            // do_middle();
-            // break;
+            do_middle();
+            break;
         default:
             GMX_THROW(APIError("Non existing integrator selected"));
     }

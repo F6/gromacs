@@ -283,4 +283,19 @@ void correct_ekin(FILE *log, int start, int end, rvec v[],
                   rvec vcm, real mass[], real tmass, tensor ekin);
 /* Correct ekin for vcm */
 
+
+/* Middle Scheme */
+
+void update_coords_middle_scheme(int64_t                              step,
+                   const t_inputrec                    *inputrec, /* input record and box stuff	*/
+                   const t_mdatoms                     *md,
+                   t_state                             *state,
+                   gmx::ArrayRefWithPadding<gmx::RVec>  f, /* forces on home particles */
+                   const t_fcdata                      *fcd,
+                   const gmx_ekindata_t                *ekind,
+                   gmx_update_t                        *upd,
+                   int                                  bUpdatePart,
+                   const t_commrec                     *cr, /* these shouldn't be here -- need to think about it */
+                   const gmx::Constraints              *constr);
+
 #endif

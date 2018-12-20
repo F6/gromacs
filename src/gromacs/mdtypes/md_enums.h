@@ -122,6 +122,11 @@ enum {
     etrtVELOCITY1, etrtVELOCITY2, etrtPOSITION, etrtSKIPALL, etrtNR
 };
 
+//! Middle scheme trotter decomposition 
+enum {
+    emstrtVELOCITY1, emstrtVELOCITY2, emstrtPOSITION1, emstrtPOSITION2, emstrtNR
+};
+
 //! Sequenced parts of the trotter decomposition.
 enum {
     ettTSEQ0,  ettTSEQ1,  ettTSEQ2,  ettTSEQ3,  ettTSEQ4, ettTSEQMAX
@@ -237,10 +242,12 @@ extern const char *ei_names[eiNR+1];
 #define EI(e)          enum_name(e, eiNR, ei_names)
 //! Do we use MiMiC QM/MM?
 #define EI_MIMIC(e) ((e) == eiMimic)
+//! Do we use Middle Scheme?
+#define EI_MIDDLE(e) ((e) == eiMiddle)
 //! Do we use velocity Verlet
-#define EI_VV(e) ((e) == eiVV || (e) == eiVVAK)
+#define EI_VV(e) ((e) == eiVV || (e) == eiVVAK || EI_MIDDLE(e))
 //! Do we use molecular dynamics
-#define EI_MD(e) ((e) == eiMD || EI_VV(e) || EI_MIMIC(e))
+#define EI_MD(e) ((e) == eiMD || EI_VV(e) || EI_MIMIC(e) || EI_MIDDLE(e))
 //! Do we use stochastic dynamics
 #define EI_SD(e) ((e) == eiSD1)
 //! Do we use any stochastic integrator
@@ -254,8 +261,6 @@ extern const char *ei_names[eiNR+1];
 #define EI_TPI(e) ((e) == eiTPI || (e) == eiTPIC)
 //! Do we deal with particle velocities
 #define EI_STATE_VELOCITY(e) (EI_MD(e) || EI_SD(e))
-//! Do we use Middle Scheme?
-#define EI_MIDDLE(e) ((e) == eiMiddle)
 
 
 //! Constraint algorithm
