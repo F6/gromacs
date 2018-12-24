@@ -321,13 +321,12 @@ void gmx::Integrator::do_middle()
 
     const ContinuationOptions &continuationOptions    = mdrunOptions.continuationOptions;
 
-    /* ########### END: initialize data ########### */ 
-
     if (ir->efep != efepNO && ir->fepvals->nstdhdl != 0)
     {
         doFreeEnergyPerturbation = true;
     }
 
+    /* ########### END: initialize data ########### */ 
 
     /* ########### BIGIN: calculate globals and remove COM ########### */ 
 
@@ -414,6 +413,58 @@ void gmx::Integrator::do_middle()
     step     = ir->init_step;
     step_rel = 0;
 
+
+    /* Update force once, before the first velocity-update step */
+    /* ###### BIGIN: update force ###### */ 
+
+    force_flags =   ( GMX_FORCE_STATECHANGED 
+                    | ((inputrecDynamicBox(ir)) ? GMX_FORCE_DYNAMICBOX : 0) 
+                    | GMX_FORCE_ALLFORCES 
+                    | GMX_FORCE_VIRIAL // TODO: Get rid of this once #2649 is solved
+                    | GMX_FORCE_ENERGY 
+                    | (doFreeEnergyPerturbation ? GMX_FORCE_DHDL : 0)
+                    );
+
+    if (shellfc)
+    {
+        /* Now is the time to relax the shells */
+        relax_shell_flexcon(fplog, cr, ms, mdrunOptions.verbose,
+                            enforcedRotation, step,
+                            ir, bNS, force_flags, top,
+                            constr, enerd, fcd,
+                            state, f.arrayRefWithPadding(), force_vir, mdatoms,
+                            nrnb, wcycle, graph, groups,
+                            shellfc, fr, t, mu_tot,
+                            vsite,
+                            ddOpenBalanceRegion, ddCloseBalanceRegion);
+    }
+    else
+    {
+        /* The coordinates (x) are shifted (to get whole molecules)
+            * in do_force.
+            * This is parallellized as well, and does communication too.
+            * Check comments in sim_util.c
+            */
+
+        /* Since we have no plan to support awh at this moment, we simply 
+            * disable it. What's more, if the user has specified to use awh,
+            * he should have already recieved a notification at the begining 
+            * of this function.
+            */
+        Awh       *awh = nullptr;
+        gmx_edsam *ed  = nullptr;
+        do_force(fplog, cr, ms, ir, awh, enforcedRotation,
+                    step, nrnb, wcycle, top, groups,
+                    state->box, state->x.arrayRefWithPadding(), &state->hist,
+                    f.arrayRefWithPadding(), force_vir, mdatoms, enerd, fcd,
+                    state->lambda, graph,
+                    fr, vsite, mu_tot, t, ed,
+                    GMX_FORCE_NS | force_flags,
+                    ddOpenBalanceRegion, ddCloseBalanceRegion);
+    }
+    /* ###### END: update force ###### */ 
+
+
     /* and stop now if we should */
     isLastStep = (isLastStep || (ir->nsteps >= 0 && step_rel > ir->nsteps));
     while (!isLastStep)
@@ -424,11 +475,52 @@ void gmx::Integrator::do_middle()
 
         t         = t0 + step*ir->delta_t;
 
+        /* Whether or not to Stop Center of Mass motion */
+        bStopCM = (ir->comm_mode != ecmNO && do_per_step(step, ir->nstcomm));
+
+        if (ir->efep != efepNO)
+        {
+            setCurrentLambdasLocal(step, ir->fepvals, lam0, state);
+        }
+
+        if (MASTER(cr))
+        {
+            const bool constructVsites = ((vsite != nullptr) && mdrunOptions.rerunConstructVsites);
+            if (constructVsites && DOMAINDECOMP(cr))
+            {
+                gmx_fatal(FARGS, "Vsite recalculation with -rerun is not implemented with domain decomposition, "
+                          "use a single rank");
+            }
+        }
+
+        if (DOMAINDECOMP(cr))
+        {
+            /* Repartition the domain decomposition */
+            const bool bMasterState = true;
+            dd_partition_system(fplog, mdlog, step, cr,
+                                bMasterState, nstglobalcomm,
+                                state_global, top_global, ir,
+                                state, &f, mdAtoms, top, fr,
+                                vsite, constr,
+                                nrnb, wcycle,
+                                mdrunOptions.verbose);
+            shouldCheckNumberOfBondedInteractions = true;
+        }
+
+        if (MASTER(cr) && do_log)
+        {
+            print_ebin_header(fplog, step, t); /* can we improve the information printed here? */
+        }
+
+        if (ir->efep != efepNO)
+        {
+            update_mdatoms(mdatoms, state->lambda[efptMASS]);
+        }
+
         /* update, until we need to calculate force. */
 
         /* ###### BIGIN: update coordinates ###### */ 
 
-        // if (MASTER(cr))
         {
             wallcycle_start(wcycle, ewcUPDATE);
 
@@ -494,44 +586,6 @@ void gmx::Integrator::do_middle()
          */
         /* ###### BIGIN: update force ###### */ 
 
-        if (ir->efep != efepNO)
-        {
-            setCurrentLambdasLocal(step, ir->fepvals, lam0, state);
-        }
-
-        if (MASTER(cr))
-        {
-            const bool constructVsites = ((vsite != nullptr) && mdrunOptions.rerunConstructVsites);
-            if (constructVsites && DOMAINDECOMP(cr))
-            {
-                gmx_fatal(FARGS, "Vsite recalculation with -rerun is not implemented with domain decomposition, "
-                          "use a single rank");
-            }
-        }
-
-        if (DOMAINDECOMP(cr))
-        {
-            /* Repartition the domain decomposition */
-            const bool bMasterState = true;
-            dd_partition_system(fplog, mdlog, step, cr,
-                                bMasterState, nstglobalcomm,
-                                state_global, top_global, ir,
-                                state, &f, mdAtoms, top, fr,
-                                vsite, constr,
-                                nrnb, wcycle,
-                                mdrunOptions.verbose);
-            shouldCheckNumberOfBondedInteractions = true;
-        }
-
-        if (MASTER(cr) && do_log)
-        {
-            print_ebin_header(fplog, step, t); /* can we improve the information printed here? */
-        }
-
-        if (ir->efep != efepNO)
-        {
-            update_mdatoms(mdatoms, state->lambda[efptMASS]);
-        }
 
         force_flags =   ( GMX_FORCE_STATECHANGED 
                         | ((inputrecDynamicBox(ir)) ? GMX_FORCE_DYNAMICBOX : 0) 
@@ -582,7 +636,6 @@ void gmx::Integrator::do_middle()
 
         // update velocities after updating force.
 
-        // if (MASTER(cr))
         {
             wallcycle_start(wcycle, ewcUPDATE);
             update_coords_middle_scheme(step, ir, mdatoms, state, f.arrayRefWithPadding(), fcd,
@@ -633,19 +686,20 @@ void gmx::Integrator::do_middle()
             wallcycle_stop(wcycle, ewcVSITECONSTR);
         }
 
-    /* ########### BIGIN: calculate globals ########### */ 
+        /* ########### BIGIN: calculate globals ########### */ 
 
         {
             const bool          doInterSimSignal = false;
             const bool          doIntraSimSignal = true;
             bool                bSumEkinhOld     = false;
-            t_vcm              *vcm              = nullptr;
+
             SimulationSignaller signaller(&signals, cr, ms, doInterSimSignal, doIntraSimSignal);
 
             int cglo_flags =    (CGLO_GSTAT 
                                 | CGLO_ENERGY
                                 | (shouldCheckNumberOfBondedInteractions ? CGLO_CHECK_NUMBER_OF_BONDED_INTERACTIONS : 0)
                                 | CGLO_TEMPERATURE
+                                | (bStopCM ? CGLO_STOPCM : 0)
                                 // | CGLO_PRESSURE    // stuck forever... need more investigation
                                 // | CGLO_CONSTRAINT  // segment fault 11... need more investigation
                                 );
@@ -660,7 +714,7 @@ void gmx::Integrator::do_middle()
                                             &shouldCheckNumberOfBondedInteractions);
         }
 
-    /* ########### END: calculate globals ########### */ 
+        /* ########### END: calculate globals ########### */ 
 
         {
             gmx::HostVector<gmx::RVec>     fglobal(top_global->natoms);
